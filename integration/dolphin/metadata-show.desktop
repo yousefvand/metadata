@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Service
+MimeType=application/octet-stream;
+Actions=showMetadata;
+
+[Desktop Action showMetadata]
+Name=Show metadata
+Icon=document-properties
+Exec=metadata %f

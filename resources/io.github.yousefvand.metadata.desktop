@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=metadata
+GenericName=Metadata Editor
+Comment=View and edit file metadata
+Exec=metadata %f
+Icon=io.github.yousefvand.metadata
+Terminal=false
+Categories=Utility;FileTools;Qt;
+Keywords=metadata;EXIF;XMP;IPTC;PDF;
+StartupNotify=true
+MimeType=application/octet-stream;
