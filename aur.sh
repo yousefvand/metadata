@@ -7,7 +7,7 @@ MAINTAINER_EMAIL="${MAINTAINER_EMAIL:-remisa.yousefvand@gmail.com}"
 AUR_PACKAGE_NAME="${AUR_PACKAGE_NAME:-metadata}"
 GITHUB_OWNER="${GITHUB_OWNER:-yousefvand}"
 GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-metadata}"
-VERSION="${VERSION:-0.1.0}"
+VERSION="${VERSION:-0.2.0}"
 PKGREL="${PKGREL:-1}"
 AUR_WORKDIR="${AUR_WORKDIR:-${TMPDIR:-/tmp}/${AUR_PACKAGE_NAME}-aur}"
 AUR_SSH_URL="ssh://aur@aur.archlinux.org/${AUR_PACKAGE_NAME}.git"
@@ -63,7 +63,7 @@ cat > "${AUR_WORKDIR}/PKGBUILD" <<PKGBUILD
 pkgname=${AUR_PACKAGE_NAME}
 pkgver=${VERSION}
 pkgrel=${PKGREL}
-pkgdesc='Qt 6 application for viewing, adding, editing, and removing file metadata'
+pkgdesc='Qt 6 application for viewing, editing, copying, exporting, and removing file metadata'
 arch=('x86_64')
 url='${UPSTREAM_URL}'
 license=('MIT')
@@ -114,6 +114,14 @@ PKGBUILD
             *) git rm -rf --ignore-unmatch -- "$tracked_file" ;;
         esac
     done < <(git ls-files -z)
+
+    # Remove any untracked build/source directories as well. The AUR worktree
+    # is deliberately reduced to PKGBUILD and .SRCINFO before committing.
+    find . -mindepth 1 -maxdepth 1 \
+        ! -name .git \
+        ! -name PKGBUILD \
+        ! -name .SRCINFO \
+        -exec rm -rf -- {} +
 
     git add PKGBUILD .SRCINFO
 

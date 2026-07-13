@@ -23,6 +23,12 @@ private:
         EditableRole,
     };
 
+    enum class MetadataScope
+    {
+        All,
+        Editable,
+    };
+
     void createUi();
     void createMenus();
     void updateActions();
@@ -35,14 +41,21 @@ private:
     void editMetadata();
     void removeMetadata();
     void removeAllMetadata();
+    void copyMetadataToClipboard();
+    void exportMetadata();
     void showAboutMetadata();
 
     [[nodiscard]] QTreeWidgetItem *selectedItem() const;
     [[nodiscard]] QString selectedFullTag() const;
     [[nodiscard]] bool selectedItemEditable() const;
+    [[nodiscard]] MetadataScope configuredScope(const QString &settingsKey,
+                                                 MetadataScope defaultScope) const;
+    [[nodiscard]] QList<MetadataEntry> entriesForScope(MetadataScope scope) const;
+    [[nodiscard]] static QString makeAsciiTable(const QList<MetadataEntry> &entries);
 
     MetadataBackend m_backend;
     QString m_currentFile;
+    QList<MetadataEntry> m_metadataEntries;
 
     QLineEdit *m_filePath = nullptr;
     QTreeWidget *m_tree = nullptr;
@@ -50,5 +63,7 @@ private:
     QPushButton *m_editButton = nullptr;
     QPushButton *m_removeButton = nullptr;
     QPushButton *m_removeAllButton = nullptr;
+    QPushButton *m_copyButton = nullptr;
+    QPushButton *m_exportButton = nullptr;
     QPushButton *m_refreshButton = nullptr;
 };

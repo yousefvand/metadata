@@ -1,19 +1,17 @@
 #include "MainWindow.h"
+#include "Version.h"
 
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QFileInfo>
-
-#ifndef METADATA_VERSION
-#define METADATA_VERSION "0.1.0"
-#endif
 
 int main(int argc, char *argv[])
 {
     QApplication application(argc, argv);
     QApplication::setApplicationName(QStringLiteral("metadata"));
     QApplication::setApplicationDisplayName(QStringLiteral("metadata"));
-    QApplication::setApplicationVersion(QString::fromLatin1(METADATA_VERSION));
+    QApplication::setApplicationVersion(
+        QString::fromLatin1(MetadataBuildInfo::Version));
     QApplication::setOrganizationName(QStringLiteral("Yousefvand"));
     QApplication::setOrganizationDomain(QStringLiteral("github.com/yousefvand"));
     QApplication::setDesktopFileName(QStringLiteral("io.github.yousefvand.metadata"));

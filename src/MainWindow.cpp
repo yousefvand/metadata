@@ -1,18 +1,26 @@
 #include "MainWindow.h"
 
 #include "TagDialog.h"
+#include "Version.h"
 
+#include <algorithm>
 #include <QAbstractItemView>
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QBrush>
+#include <QByteArray>
+#include <QClipboard>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QIcon>
+#include <QIODevice>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
@@ -21,20 +29,35 @@
 #include <QMessageBox>
 #include <QPalette>
 #include <QPushButton>
+#include <QSaveFile>
+#include <QSettings>
 #include <QStatusBar>
+#include <QStringList>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
 
-#ifndef METADATA_VERSION
-#define METADATA_VERSION "0.1.0"
-#endif
+namespace
+{
+QStringList cellLines(QString text)
+{
+    text.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
+    text.replace(QLatin1Char('\r'), QLatin1Char('\n'));
+    text.replace(QLatin1Char('\t'), QStringLiteral("    "));
 
-#ifndef METADATA_REPOSITORY_URL
-#define METADATA_REPOSITORY_URL "https://github.com/yousefvand/metadata"
-#endif
+    for (qsizetype index = 0; index < text.size(); ++index) {
+        const ushort codePoint = text.at(index).unicode();
+        if ((codePoint < 0x20U && codePoint != 0x0AU) || codePoint == 0x7FU) {
+            text[index] = QLatin1Char(' ');
+        }
+    }
+
+    return text.split(QLatin1Char('\n'), Qt::KeepEmptyParts);
+}
+
+} // namespace
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -112,6 +135,8 @@ void MainWindow::createUi()
     m_editButton = new QPushButton(QStringLiteral("Edit"), central);
     m_removeButton = new QPushButton(QStringLiteral("Remove"), central);
     m_removeAllButton = new QPushButton(QStringLiteral("Remove All"), central);
+    m_copyButton = new QPushButton(QStringLiteral("Copy to Clipboard"), central);
+    m_exportButton = new QPushButton(QStringLiteral("Export"), central);
     m_refreshButton = new QPushButton(QStringLiteral("Refresh"), central);
 
     buttonLayout->addWidget(m_addButton);
@@ -119,6 +144,8 @@ void MainWindow::createUi()
     buttonLayout->addWidget(m_removeButton);
     buttonLayout->addWidget(m_removeAllButton);
     buttonLayout->addStretch(1);
+    buttonLayout->addWidget(m_copyButton);
+    buttonLayout->addWidget(m_exportButton);
     buttonLayout->addWidget(m_refreshButton);
 
     mainLayout->addLayout(pathLayout);
@@ -134,6 +161,14 @@ void MainWindow::createUi()
             &QPushButton::clicked,
             this,
             [this] { removeAllMetadata(); });
+    connect(m_copyButton,
+            &QPushButton::clicked,
+            this,
+            [this] { copyMetadataToClipboard(); });
+    connect(m_exportButton,
+            &QPushButton::clicked,
+            this,
+            [this] { exportMetadata(); });
     connect(m_refreshButton, &QPushButton::clicked, this, [this] { loadMetadata(); });
     connect(m_tree,
             &QTreeWidget::itemSelectionChanged,
@@ -160,8 +195,61 @@ void MainWindow::createMenus()
     connect(openAction, &QAction::triggered, this, [this] { chooseFile(); });
     connect(exitAction, &QAction::triggered, this, &QWidget::close);
 
+    auto *settingsMenu = menuBar()->addMenu(QStringLiteral("&Settings"));
+
+    auto *copyScopeMenu = settingsMenu->addMenu(QStringLiteral("Copy to Clipboard"));
+    auto *copyScopeGroup = new QActionGroup(copyScopeMenu);
+    copyScopeGroup->setExclusive(true);
+    auto *copyEditableAction =
+        copyScopeMenu->addAction(QStringLiteral("Editable key/values"));
+    auto *copyAllAction = copyScopeMenu->addAction(QStringLiteral("All key/values"));
+    copyEditableAction->setCheckable(true);
+    copyAllAction->setCheckable(true);
+    copyScopeGroup->addAction(copyEditableAction);
+    copyScopeGroup->addAction(copyAllAction);
+
+    const MetadataScope copyScope =
+        configuredScope(QStringLiteral("copy/scope"), MetadataScope::Editable);
+    copyEditableAction->setChecked(copyScope == MetadataScope::Editable);
+    copyAllAction->setChecked(copyScope == MetadataScope::All);
+
+    connect(copyEditableAction, &QAction::triggered, this, [this] {
+        QSettings().setValue(QStringLiteral("copy/scope"), QStringLiteral("editable"));
+        updateActions();
+    });
+    connect(copyAllAction, &QAction::triggered, this, [this] {
+        QSettings().setValue(QStringLiteral("copy/scope"), QStringLiteral("all"));
+        updateActions();
+    });
+
+    auto *exportScopeMenu = settingsMenu->addMenu(QStringLiteral("Export"));
+    auto *exportScopeGroup = new QActionGroup(exportScopeMenu);
+    exportScopeGroup->setExclusive(true);
+    auto *exportAllAction = exportScopeMenu->addAction(QStringLiteral("All key/values"));
+    auto *exportEditableAction =
+        exportScopeMenu->addAction(QStringLiteral("Editable key/values"));
+    exportAllAction->setCheckable(true);
+    exportEditableAction->setCheckable(true);
+    exportScopeGroup->addAction(exportAllAction);
+    exportScopeGroup->addAction(exportEditableAction);
+
+    const MetadataScope exportScope =
+        configuredScope(QStringLiteral("export/scope"), MetadataScope::All);
+    exportAllAction->setChecked(exportScope == MetadataScope::All);
+    exportEditableAction->setChecked(exportScope == MetadataScope::Editable);
+
+    connect(exportAllAction, &QAction::triggered, this, [this] {
+        QSettings().setValue(QStringLiteral("export/scope"), QStringLiteral("all"));
+        updateActions();
+    });
+    connect(exportEditableAction, &QAction::triggered, this, [this] {
+        QSettings().setValue(QStringLiteral("export/scope"),
+                             QStringLiteral("editable"));
+        updateActions();
+    });
+
     auto *aboutMenu = menuBar()->addMenu(QStringLiteral("&About"));
-    auto *aboutMetadata = aboutMenu->addAction(QStringLiteral("About metadate"));
+    auto *aboutMetadata = aboutMenu->addAction(QStringLiteral("About metadata"));
     auto *aboutQt = aboutMenu->addAction(QStringLiteral("About Qt"));
 
     connect(aboutMetadata,
@@ -178,12 +266,15 @@ void MainWindow::updateActions()
 {
     const bool fileLoaded = !m_currentFile.isEmpty();
     const bool editable = selectedItemEditable();
+    const bool metadataAvailable = !m_metadataEntries.isEmpty();
 
     m_addButton->setEnabled(fileLoaded);
     m_editButton->setEnabled(fileLoaded && editable);
     m_removeButton->setEnabled(fileLoaded && editable);
     m_removeAllButton->setEnabled(
         fileLoaded && !MetadataBackend::isProprietaryRaw(m_currentFile));
+    m_copyButton->setEnabled(metadataAvailable);
+    m_exportButton->setEnabled(metadataAvailable);
     m_refreshButton->setEnabled(fileLoaded);
 }
 
@@ -198,23 +289,24 @@ void MainWindow::loadMetadata()
     QApplication::restoreOverrideCursor();
 
     m_tree->clear();
+    m_metadataEntries.clear();
     if (!result.ok) {
         QMessageBox::critical(this, QStringLiteral("Metadata error"), result.message);
         updateActions();
         return;
     }
 
+    m_metadataEntries = result.entries;
     m_tree->setSortingEnabled(false);
     int embeddedCount = 0;
     for (const MetadataEntry &entry : result.entries) {
-        auto *item = new QTreeWidgetItem(
-            {entry.group, entry.tag, entry.value});
+        auto *item = new QTreeWidgetItem({entry.group, entry.tag, entry.value});
         item->setData(0, FullTagRole, entry.fullTag);
         item->setData(0, EditableRole, entry.editable);
 
         if (!entry.editable) {
-            const QBrush disabledBrush(palette().color(QPalette::Disabled,
-                                                       QPalette::Text));
+            const QBrush disabledBrush(
+                palette().color(QPalette::Disabled, QPalette::Text));
             for (int column = 0; column < 3; ++column) {
                 item->setForeground(column, disabledBrush);
                 item->setToolTip(column,
@@ -384,10 +476,89 @@ void MainWindow::removeAllMetadata()
     showOperationResult(result, QStringLiteral("All removable metadata removed."));
 }
 
+void MainWindow::copyMetadataToClipboard()
+{
+    const MetadataScope scope =
+        configuredScope(QStringLiteral("copy/scope"), MetadataScope::Editable);
+    const QList<MetadataEntry> entries = entriesForScope(scope);
+    if (entries.isEmpty()) {
+        QMessageBox::information(
+            this,
+            QStringLiteral("Copy metadata"),
+            QStringLiteral("No metadata fields match the selected copy setting."));
+        return;
+    }
+
+    QClipboard *clipboard = QGuiApplication::clipboard();
+    if (clipboard == nullptr) {
+        QMessageBox::critical(this,
+                              QStringLiteral("Copy metadata"),
+                              QStringLiteral("The system clipboard is unavailable."));
+        return;
+    }
+
+    clipboard->setText(makeAsciiTable(entries));
+    statusBar()->showMessage(
+        QStringLiteral("Copied %1 metadata fields to the clipboard.").arg(entries.size()),
+        10000);
+}
+
+void MainWindow::exportMetadata()
+{
+    const MetadataScope scope =
+        configuredScope(QStringLiteral("export/scope"), MetadataScope::All);
+    const QList<MetadataEntry> entries = entriesForScope(scope);
+    if (entries.isEmpty()) {
+        QMessageBox::information(
+            this,
+            QStringLiteral("Export metadata"),
+            QStringLiteral("No metadata fields match the selected export setting."));
+        return;
+    }
+
+    const QFileInfo sourceInfo(m_currentFile);
+    const QString defaultPath =
+        QDir(sourceInfo.absolutePath()).filePath(sourceInfo.fileName()
+                                                + QStringLiteral(".txt"));
+    const QString exportPath = QFileDialog::getSaveFileName(
+        this,
+        QStringLiteral("Export metadata"),
+        defaultPath,
+        QStringLiteral("Text files (*.txt);;All files (*)"));
+    if (exportPath.isEmpty()) {
+        return;
+    }
+
+    QSaveFile output(exportPath);
+    if (!output.open(QIODevice::WriteOnly)) {
+        QMessageBox::critical(this,
+                              QStringLiteral("Export metadata"),
+                              QStringLiteral("Could not open the export file:\n%1")
+                                  .arg(output.errorString()));
+        return;
+    }
+
+    const QByteArray payload = makeAsciiTable(entries).toUtf8();
+    const qint64 written = output.write(payload);
+    if (written != static_cast<qint64>(payload.size()) || !output.commit()) {
+        QMessageBox::critical(this,
+                              QStringLiteral("Export metadata"),
+                              QStringLiteral("Could not write the export file:\n%1")
+                                  .arg(output.errorString()));
+        return;
+    }
+
+    statusBar()->showMessage(
+        QStringLiteral("Exported %1 metadata fields to %2.")
+            .arg(entries.size())
+            .arg(exportPath),
+        10000);
+}
+
 void MainWindow::showAboutMetadata()
 {
     QDialog dialog(this);
-    dialog.setWindowTitle(QStringLiteral("About metadate"));
+    dialog.setWindowTitle(QStringLiteral("About metadata"));
     dialog.setWindowIcon(windowIcon());
     dialog.setModal(true);
 
@@ -403,8 +574,8 @@ void MainWindow::showAboutMetadata()
         QStringLiteral("<h3>metadata</h3>"
                        "<p>metadata version %1</p>"
                        "<p><a href=\"%2\">%2</a></p>")
-            .arg(QString::fromLatin1(METADATA_VERSION),
-                 QString::fromLatin1(METADATA_REPOSITORY_URL)));
+            .arg(QApplication::applicationVersion(),
+                 QString::fromLatin1(MetadataBuildInfo::RepositoryUrl)));
 
     auto *contentLayout = new QHBoxLayout;
     contentLayout->addWidget(iconLabel);
@@ -435,4 +606,86 @@ bool MainWindow::selectedItemEditable() const
 {
     const QTreeWidgetItem *item = selectedItem();
     return item != nullptr && item->data(0, EditableRole).toBool();
+}
+
+MainWindow::MetadataScope MainWindow::configuredScope(
+    const QString &settingsKey,
+    const MetadataScope defaultScope) const
+{
+    const QString defaultValue = defaultScope == MetadataScope::All
+        ? QStringLiteral("all")
+        : QStringLiteral("editable");
+    const QString value = QSettings().value(settingsKey, defaultValue).toString();
+    if (value.compare(QStringLiteral("all"), Qt::CaseInsensitive) == 0) {
+        return MetadataScope::All;
+    }
+    if (value.compare(QStringLiteral("editable"), Qt::CaseInsensitive) == 0) {
+        return MetadataScope::Editable;
+    }
+    return defaultScope;
+}
+
+QList<MetadataEntry> MainWindow::entriesForScope(const MetadataScope scope) const
+{
+    if (scope == MetadataScope::All) {
+        return m_metadataEntries;
+    }
+
+    QList<MetadataEntry> editableEntries;
+    editableEntries.reserve(m_metadataEntries.size());
+    for (const MetadataEntry &entry : m_metadataEntries) {
+        if (entry.editable) {
+            editableEntries.append(entry);
+        }
+    }
+    return editableEntries;
+}
+
+QString MainWindow::makeAsciiTable(const QList<MetadataEntry> &entries)
+{
+    struct TableRow
+    {
+        QString key;
+        QString value;
+    };
+
+    QList<TableRow> rows;
+    qsizetype keyWidth = QStringLiteral("Key").size();
+    qsizetype valueWidth = QStringLiteral("Value").size();
+
+    for (const MetadataEntry &entry : entries) {
+        const QStringList keyLines = cellLines(entry.fullTag);
+        const QStringList valueLines = cellLines(entry.value);
+        const qsizetype lineCount = std::max(keyLines.size(), valueLines.size());
+
+        for (qsizetype line = 0; line < lineCount; ++line) {
+            const QString key = line < keyLines.size() ? keyLines.at(line) : QString();
+            const QString value =
+                line < valueLines.size() ? valueLines.at(line) : QString();
+            keyWidth = std::max(keyWidth, key.size());
+            valueWidth = std::max(valueWidth, value.size());
+            rows.append({key, value});
+        }
+    }
+
+    const QString separator =
+        QStringLiteral("+%1+%2+")
+            .arg(QString(keyWidth + 2, QLatin1Char('-')),
+                 QString(valueWidth + 2, QLatin1Char('-')));
+
+    QStringList output;
+    output.reserve(rows.size() + 4);
+    output.append(separator);
+    output.append(QStringLiteral("| %1 | %2 |")
+                      .arg(QStringLiteral("Key").leftJustified(keyWidth),
+                           QStringLiteral("Value").leftJustified(valueWidth)));
+    output.append(separator);
+    for (const TableRow &row : rows) {
+        output.append(QStringLiteral("| %1 | %2 |")
+                          .arg(row.key.leftJustified(keyWidth),
+                               row.value.leftJustified(valueWidth)));
+    }
+    output.append(separator);
+
+    return output.join(QLatin1Char('\n')) + QLatin1Char('\n');
 }

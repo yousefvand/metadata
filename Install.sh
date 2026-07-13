@@ -88,7 +88,7 @@ detect_file_manager() {
 }
 
 printf '\n'
-read -r -p 'Do you want to add "Show metadata" to your file manager? [Y/n] ' context_answer
+read -r -p 'Do you want to add "metadata" to your file manager? [Y/n] ' context_answer
 context_answer="${context_answer:-Y}"
 
 if [[ "$context_answer" =~ ^[Yy]$ ]]; then

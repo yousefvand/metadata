@@ -1,6 +1,6 @@
-# metadata 0.1.0
+# metadata 0.2.0
 
-![,etadata](resources/screenshot.png)
+![metadata](resources/screenshot.png)
 
 A Qt 6/C++ desktop application for Arch Linux KDE Wayland that reads and edits
 file metadata through ExifTool. It supports opening a file directly or through a
@@ -13,12 +13,20 @@ Dolphin context-menu action.
 - Edit a selected metadata tag.
 - Remove a selected metadata tag.
 - Remove all removable metadata.
-- Open File, About metadate, and About Qt menu actions.
+- Copy metadata to the clipboard as a minimal ASCII key/value table.
+- Export metadata to a UTF-8 text file as a minimal ASCII key/value table.
+- Configure copy and export independently to include all fields or only editable
+  fields.
+- Open File, About metadata, and About Qt menu actions.
 - Accept a file path as a command-line argument for file-manager integration.
 - Use qpdf to rewrite PDFs after metadata changes and discard old incremental
   objects.
 - Block Remove All for proprietary camera RAW formats because their metadata may
   be rendering-critical.
+
+Copy defaults to editable key/values. Export defaults to all key/values. Exported
+files initially use the complete source filename followed by `.txt`; for example,
+`report.pdf` becomes `report.pdf.txt`.
 
 ## Runtime architecture
 
@@ -32,7 +40,18 @@ formats have format-specific limitations. The application uses qpdf for PDFs,
 but no general-purpose tool can promise that every proprietary or structural
 field in every format is safely removable.
 
-## Build
+## Installation
+
+### Arch Linux (AUR)
+
+```bash
+yay -S metadata
+```
+
+The AUR repository contains packaging metadata only. The package build downloads
+the tagged source archive from the GitHub project.
+
+### Build from source
 
 ```bash
 sudo pacman -S --needed base-devel cmake ninja qt6-base \
@@ -43,7 +62,7 @@ cmake --build build
 ./build/metadata
 ```
 
-## Install and uninstall
+### Install and uninstall scripts
 
 ```bash
 chmod +x Install.sh Uninstall.sh aur.sh

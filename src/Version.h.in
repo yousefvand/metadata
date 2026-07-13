@@ -1,0 +1,7 @@
+#pragma once
+
+namespace MetadataBuildInfo
+{
+inline constexpr char Version[] = "@PROJECT_VERSION@";
+inline constexpr char RepositoryUrl[] = "@METADATA_REPOSITORY_URL@";
+} // namespace MetadataBuildInfo
