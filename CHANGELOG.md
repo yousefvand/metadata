@@ -45,6 +45,13 @@ and the project follows [Semantic Versioning](https://semver.org/).
   content-type, and OpenDocument metadata handling.
 - Fixed the AUR build path that enabled a Dolphin service-menu CMake option while
   the referenced service-menu file was absent.
+- Fixed `aur.sh` and its generated `PKGBUILD` to use the repository's actual
+  `0.3.0` tag instead of requesting the nonexistent `v0.3.0` tag.
+- Fixed the Dolphin context-menu action to use the metadata application icon
+  instead of a generic icon, installed it in both application and action icon
+  contexts, and forced a non-incremental KDE service-cache refresh.
+- Set the AUR packaging revision to `0.3.0-2`; its `prepare()` step corrects the
+  icon without moving or rewriting the published `0.3.0` tag.
 - Prevented unapplied changes from being silently lost when opening another file,
   refreshing, or quitting.
 

@@ -1,5 +1,7 @@
 # metadata
 
+![metadata screenshot](resources/screenshot.png)
+
 A native Qt 6/C++ metadata editor for Arch Linux KDE Wayland. It reads metadata,
 stages additions/edits/removals in the interface, and changes the file only after
 the user clicks **Apply**.

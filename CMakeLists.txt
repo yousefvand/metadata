@@ -59,6 +59,12 @@ install(FILES resources/io.github.yousefvand.metadata.svg
     DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
 )
 
+# Dolphin service-menu actions use the Actions icon context. Installing the
+# same named icon there makes lookup reliable across icon themes.
+install(FILES resources/io.github.yousefvand.metadata.svg
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/actions
+)
+
 install(FILES LICENSE
     DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/metadata
 )

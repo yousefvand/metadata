@@ -39,6 +39,7 @@ log "Removing application-specific installed files."
     "${PREFIX}/bin/metadata" \
     "${PREFIX}/share/applications/io.github.yousefvand.metadata.desktop" \
     "${PREFIX}/share/icons/hicolor/scalable/apps/io.github.yousefvand.metadata.svg" \
+    "${PREFIX}/share/icons/hicolor/scalable/actions/io.github.yousefvand.metadata.svg" \
     "${PREFIX}/share/licenses/metadata/LICENSE" \
     "${PREFIX}/share/doc/metadata/README.md" \
     "${PREFIX}/share/doc/metadata/CHANGELOG.md" \
@@ -58,7 +59,7 @@ command -v gtk-update-icon-cache >/dev/null 2>&1 \
     && "${SUDO[@]}" gtk-update-icon-cache -f -t "${PREFIX}/share/icons/hicolor" >/dev/null 2>&1 \
     || true
 command -v kbuildsycoca6 >/dev/null 2>&1 \
-    && kbuildsycoca6 >/dev/null 2>&1 || true
+    && kbuildsycoca6 --noincremental >/dev/null 2>&1 || true
 
 rm -rf -- "$BUILD_DIR" "$STATE_DIR"
 log "Uninstallation complete. Shared packages were left installed intentionally."
