@@ -2,6 +2,7 @@
 Type=Service
 MimeType=application/octet-stream;
 Actions=showMetadata;
+X-KDE-ServiceTypes=KonqPopupMenu/Plugin
 
 [Desktop Action showMetadata]
 Name=Show metadata

@@ -4,6 +4,7 @@
 
 class QLineEdit;
 class QPlainTextEdit;
+class QLabel;
 
 class TagDialog final : public QDialog
 {
@@ -12,6 +13,7 @@ public:
 
     void setTag(const QString &tag, bool readOnly);
     void setValue(const QString &value);
+    void setHint(const QString &hint);
 
     [[nodiscard]] QString tag() const;
     [[nodiscard]] QString value() const;
@@ -19,4 +21,5 @@ public:
 private:
     QLineEdit *m_tagEdit = nullptr;
     QPlainTextEdit *m_valueEdit = nullptr;
+    QLabel *m_hint = nullptr;
 };

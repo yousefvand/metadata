@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(metadata VERSION 0.2.0 LANGUAGES CXX)
+project(metadata VERSION 0.3.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 
@@ -17,7 +17,8 @@ configure_file(
     @ONLY
 )
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets Xml)
+find_package(libzip CONFIG REQUIRED)
 qt_standard_project_setup()
 
 qt_add_executable(metadata
@@ -26,6 +27,8 @@ qt_add_executable(metadata
     src/MainWindow.h
     src/MetadataBackend.cpp
     src/MetadataBackend.h
+    src/DocumentMetadata.cpp
+    src/DocumentMetadata.h
     src/TagDialog.cpp
     src/TagDialog.h
 )
@@ -34,7 +37,11 @@ target_include_directories(metadata PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}/generated"
 )
 
-target_link_libraries(metadata PRIVATE Qt6::Widgets)
+target_link_libraries(metadata PRIVATE
+    Qt6::Widgets
+    Qt6::Xml
+    libzip::zip
+)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(metadata PRIVATE -Wall -Wextra -Wpedantic -Wconversion)
@@ -56,6 +63,10 @@ install(FILES LICENSE
     DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/metadata
 )
 
+install(FILES README.md CHANGELOG.md
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/metadata
+)
+
 option(INSTALL_DOLPHIN_SERVICE_MENU
        "Install a system-wide Dolphin context-menu action"
        OFF)
@@ -63,6 +74,9 @@ option(INSTALL_DOLPHIN_SERVICE_MENU
 if(INSTALL_DOLPHIN_SERVICE_MENU)
     install(FILES integration/dolphin/metadata-show.desktop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/kio/servicemenus
-        PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ
+        PERMISSIONS
+            OWNER_READ OWNER_WRITE OWNER_EXECUTE
+            GROUP_READ GROUP_EXECUTE
+            WORLD_READ WORLD_EXECUTE
     )
 endif()

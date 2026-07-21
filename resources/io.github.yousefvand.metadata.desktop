@@ -7,6 +7,6 @@ Exec=metadata %f
 Icon=io.github.yousefvand.metadata
 Terminal=false
 Categories=Utility;FileTools;Qt;
-Keywords=metadata;EXIF;XMP;IPTC;PDF;
+Keywords=metadata;EXIF;XMP;IPTC;PDF;Office;DOCX;XLSX;PPTX;LibreOffice;OpenDocument;ODF;
 StartupNotify=true
 MimeType=application/octet-stream;

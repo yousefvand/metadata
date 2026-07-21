@@ -14,18 +14,25 @@ log() { printf '[metadata] %s\n' "$*"; }
 fail() { printf '[metadata] ERROR: %s\n' "$*" >&2; exit 1; }
 
 if [[ "$(uname -s)" != "Linux" ]] || ! command -v pacman >/dev/null 2>&1; then
-    fail "Install.sh is intended for Arch Linux and pacman-based systems."
+    fail "install.sh is intended for Arch Linux and pacman-based systems."
 fi
 
-if (( EUID == 0 )); then
-    SUDO=()
-else
-    command -v sudo >/dev/null 2>&1 || fail "sudo is required for installation to ${PREFIX}."
-    SUDO=(sudo)
+INSTALL_SUDO=()
+PACMAN_SUDO=()
+
+if (( EUID != 0 )); then
+    if [[ ! -w "$PREFIX" && ! ( ! -e "$PREFIX" && -w "$(dirname -- "$PREFIX")" ) ]]; then
+        command -v sudo >/dev/null 2>&1 \
+            || fail "sudo is required for installation to ${PREFIX}."
+        INSTALL_SUDO=(sudo)
+    fi
+
+    # pacman always needs root, even when PREFIX points to a user-writable path.
+    command -v sudo >/dev/null 2>&1 && PACMAN_SUDO=(sudo)
 fi
 
 missing_packages=()
-for package in cmake ninja qt6-base perl-image-exiftool qpdf hicolor-icon-theme; do
+for package in cmake ninja qt6-base libzip perl-image-exiftool qpdf hicolor-icon-theme; do
     pacman -Q "$package" >/dev/null 2>&1 || missing_packages+=("$package")
 done
 
@@ -38,13 +45,16 @@ if ((${#missing_packages[@]})); then
     read -r -p "Install them with pacman? [Y/n] " answer
     answer="${answer:-Y}"
     if [[ "$answer" =~ ^[Yy]$ ]]; then
-        "${SUDO[@]}" pacman -S --needed "${missing_packages[@]}"
+        if (( EUID != 0 )) && ((${#PACMAN_SUDO[@]} == 0)); then
+            fail "sudo is required to install missing packages with pacman."
+        fi
+        "${PACMAN_SUDO[@]}" pacman -S --needed "${missing_packages[@]}"
     else
         fail "Required build/runtime packages are missing."
     fi
 fi
 
-log "Configuring the Qt 6 application."
+log "Configuring metadata 0.3.0."
 cmake -S "$SCRIPT_DIR" -B "$BUILD_DIR" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$PREFIX" \
@@ -54,13 +64,13 @@ log "Building."
 cmake --build "$BUILD_DIR" --parallel
 
 log "Installing to ${PREFIX}."
-"${SUDO[@]}" cmake --install "$BUILD_DIR"
+"${INSTALL_SUDO[@]}" cmake --install "$BUILD_DIR"
 
 command -v update-desktop-database >/dev/null 2>&1 \
-    && "${SUDO[@]}" update-desktop-database "${PREFIX}/share/applications" >/dev/null 2>&1 \
+    && "${INSTALL_SUDO[@]}" update-desktop-database "${PREFIX}/share/applications" >/dev/null 2>&1 \
     || true
 command -v gtk-update-icon-cache >/dev/null 2>&1 \
-    && "${SUDO[@]}" gtk-update-icon-cache -f -t "${PREFIX}/share/icons/hicolor" >/dev/null 2>&1 \
+    && "${INSTALL_SUDO[@]}" gtk-update-icon-cache -f -t "${PREFIX}/share/icons/hicolor" >/dev/null 2>&1 \
     || true
 
 detect_file_manager() {
@@ -79,7 +89,7 @@ detect_file_manager() {
         return 0
     fi
 
-    if pgrep -x dolphin >/dev/null 2>&1; then
+    if command -v pgrep >/dev/null 2>&1 && pgrep -x dolphin >/dev/null 2>&1; then
         printf 'dolphin'
         return 0
     fi
@@ -88,7 +98,7 @@ detect_file_manager() {
 }
 
 printf '\n'
-read -r -p 'Do you want to add "metadata" to your file manager? [Y/n] ' context_answer
+read -r -p 'Do you want to add "metadata" to your "open with" file manager? [Y/n] ' context_answer
 context_answer="${context_answer:-Y}"
 
 if [[ "$context_answer" =~ ^[Yy]$ ]]; then
@@ -101,27 +111,29 @@ if [[ "$context_answer" =~ ^[Yy]$ ]]; then
 Type=Service
 MimeType=application/octet-stream;
 Actions=showMetadata;
+X-KDE-ServiceTypes=KonqPopupMenu/Plugin
 
 [Desktop Action showMetadata]
 Name=Show metadata
 Icon=document-properties
-Exec=${PREFIX}/bin/metadata %f
+Exec="${PREFIX}/bin/metadata" %f
 MENU
         chmod +x "$CONTEXT_MENU_PATH"
-        command -v kbuildsycoca6 >/dev/null 2>&1 && kbuildsycoca6 >/dev/null 2>&1 || true
+        command -v kbuildsycoca6 >/dev/null 2>&1 \
+            && kbuildsycoca6 >/dev/null 2>&1 || true
         log "Added the Dolphin/Konqueror context-menu action."
     else
-        log "The default file manager is not Dolphin/Konqueror. No context-menu file was installed."
-        log "This project targets Arch Linux KDE; its native integration is a KDE service menu."
+        log "Dolphin/Konqueror was not detected; no context-menu file was installed."
     fi
 fi
 
 mkdir -p "$STATE_DIR"
-cat > "$STATE_FILE" <<STATE
-PREFIX=${PREFIX}
-BUILD_DIR=${BUILD_DIR}
-FILE_MANAGER=${DETECTED_FILE_MANAGER}
-CONTEXT_MENU_PATH=${CONTEXT_MENU_PATH}
-STATE
+{
+    printf 'PREFIX=%q\n' "$PREFIX"
+    printf 'BUILD_DIR=%q\n' "$BUILD_DIR"
+    printf 'FILE_MANAGER=%q\n' "$DETECTED_FILE_MANAGER"
+    printf 'CONTEXT_MENU_PATH=%q\n' "$CONTEXT_MENU_PATH"
+} > "$STATE_FILE"
+chmod 600 "$STATE_FILE"
 
 log "Installation complete. Run: metadata"

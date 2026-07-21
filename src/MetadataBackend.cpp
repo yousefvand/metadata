@@ -1,7 +1,11 @@
 #include "MetadataBackend.h"
 
+#include "DocumentMetadata.h"
+
 #include <algorithm>
+#include <QDateTime>
 #include <QFile>
+#include <QFileDevice>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -10,14 +14,63 @@
 #include <QJsonValue>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QSaveFile>
 #include <QSet>
 #include <QStandardPaths>
+#include <QTemporaryFile>
 
 namespace
 {
 QString absoluteFilePath(const QString &filePath)
 {
     return QFileInfo(filePath).absoluteFilePath();
+}
+
+QString temporaryTemplateFor(const QString &filePath)
+{
+    const QFileInfo info(filePath);
+    const QString suffixPart = info.suffix().isEmpty()
+        ? QString()
+        : QLatin1Char('.') + info.suffix();
+    return info.absolutePath() + QStringLiteral("/.") + info.completeBaseName()
+        + QStringLiteral(".metadata-XXXXXX") + suffixPart;
+}
+
+bool copyFileToDevice(const QString &sourcePath,
+                      QIODevice *destination,
+                      QString *error)
+{
+    QFile source(sourcePath);
+    if (!source.open(QIODevice::ReadOnly)) {
+        if (error != nullptr) {
+            *error = QStringLiteral("Could not read %1: %2")
+                         .arg(sourcePath, source.errorString());
+        }
+        return false;
+    }
+
+    QByteArray buffer;
+    buffer.resize(1024 * 1024);
+    while (!source.atEnd()) {
+        const qint64 amount = source.read(buffer.data(), buffer.size());
+        if (amount < 0) {
+            if (error != nullptr) {
+                *error = QStringLiteral("Could not read %1: %2")
+                             .arg(sourcePath, source.errorString());
+            }
+            return false;
+        }
+        if (amount == 0) {
+            break;
+        }
+        if (destination->write(buffer.constData(), amount) != amount) {
+            if (error != nullptr) {
+                *error = QStringLiteral("Could not write a temporary file.");
+            }
+            return false;
+        }
+    }
+    return true;
 }
 
 } // namespace
@@ -39,6 +92,46 @@ MetadataResult MetadataBackend::read(const QString &filePath) const
         return {false, QStringLiteral("The selected path is not a regular file."), {}};
     }
 
+    if (DocumentMetadata::isSupportedDocument(filePath)) {
+        MetadataResult documentResult = DocumentMetadata::read(filePath);
+        if (!documentResult.ok) {
+            return documentResult;
+        }
+
+        if (exifToolAvailable()) {
+            const MetadataResult exifResult = readExif(filePath);
+            if (exifResult.ok) {
+                for (MetadataEntry entry : exifResult.entries) {
+                    if (entry.group == QStringLiteral("ExifTool")
+                        || entry.group == QStringLiteral("File")
+                        || entry.group == QStringLiteral("System")
+                        || entry.group == QStringLiteral("Composite")
+                        || entry.group == QStringLiteral("ZIP")) {
+                        entry.editable = false;
+                        entry.embedded = false;
+                        documentResult.entries.append(entry);
+                    }
+                }
+            }
+        }
+
+        std::sort(documentResult.entries.begin(), documentResult.entries.end(),
+                  [](const MetadataEntry &left, const MetadataEntry &right) {
+                      const int groupComparison =
+                          QString::localeAwareCompare(left.group, right.group);
+                      if (groupComparison != 0) {
+                          return groupComparison < 0;
+                      }
+                      return QString::localeAwareCompare(left.tag, right.tag) < 0;
+                  });
+        return documentResult;
+    }
+
+    return readExif(filePath);
+}
+
+MetadataResult MetadataBackend::readExif(const QString &filePath) const
+{
     if (!exifToolAvailable()) {
         return {false,
                 QStringLiteral("ExifTool was not found. Install the Arch package "
@@ -132,49 +225,107 @@ MetadataResult MetadataBackend::read(const QString &filePath) const
     return {true, message, entries};
 }
 
-MetadataResult MetadataBackend::addOrEdit(const QString &filePath,
-                                          const QString &tag,
-                                          const QString &value) const
+MetadataResult MetadataBackend::applyChanges(
+    const QString &filePath,
+    const bool removeAll,
+    const QList<MetadataChange> &changes) const
 {
-    const QString cleanTag = tag.trimmed();
-    if (!validTagName(cleanTag)) {
-        return {false,
-                QStringLiteral("Invalid tag name. Use letters, numbers, '.', '_', "
-                               "'-', or ':'; for example XMP-dc:Title."),
-                {}};
+    const QFileInfo info(filePath);
+    if (!info.exists() || !info.isFile()) {
+        return {false, QStringLiteral("The selected file no longer exists."), {}};
     }
-
-    return runExifWrite(filePath,
-                        QStringLiteral("-") + cleanTag + QLatin1Char('=') + value);
-}
-
-MetadataResult MetadataBackend::remove(const QString &filePath,
-                                       const QString &tag) const
-{
-    const QString cleanTag = tag.trimmed();
-    if (!validTagName(cleanTag)) {
-        return {false, QStringLiteral("Invalid metadata tag name."), {}};
+    if (!info.isWritable()) {
+        return {false, QStringLiteral("The selected file is not writable."), {}};
     }
-
-    return runExifWrite(filePath,
-                        QStringLiteral("-") + cleanTag + QLatin1Char('='));
-}
-
-MetadataResult MetadataBackend::removeAll(const QString &filePath) const
-{
-    if (isProprietaryRaw(filePath)) {
+    if (isProprietaryRaw(filePath) && removeAll) {
         return {false,
                 QStringLiteral("Remove All is blocked for proprietary RAW files. "
                                "Their metadata may contain information required to "
                                "render the image."),
                 {}};
     }
-
-    if (isPdf(filePath)) {
-        return rewritePdf(filePath, true);
+    if (!removeAll && changes.isEmpty()) {
+        return {true, QStringLiteral("There are no pending metadata changes."), {}};
     }
 
-    return runExifWrite(filePath, QStringLiteral("-all="));
+    for (const MetadataChange &change : changes) {
+        const QString validation = tagValidationError(filePath, change.tag);
+        if (!validation.isEmpty()) {
+            return {false, validation, {}};
+        }
+    }
+
+    QTemporaryFile temporary(temporaryTemplateFor(filePath));
+    temporary.setAutoRemove(true);
+    if (!temporary.open()) {
+        return {false,
+                QStringLiteral("Could not create a temporary file beside the source: %1")
+                    .arg(temporary.errorString()),
+                {}};
+    }
+
+    QString copyError;
+    if (!copyFileToDevice(filePath, &temporary, &copyError) || !temporary.flush()) {
+        return {false, copyError.isEmpty() ? temporary.errorString() : copyError, {}};
+    }
+    const QString temporaryPath = temporary.fileName();
+    temporary.close();
+
+    MetadataResult operationResult;
+    if (DocumentMetadata::isSupportedDocument(filePath)) {
+        operationResult = DocumentMetadata::apply(temporaryPath, removeAll, changes);
+    } else {
+        operationResult = runExifWrites(temporaryPath, removeAll, changes);
+    }
+    if (!operationResult.ok) {
+        return operationResult;
+    }
+
+    return commitTemporaryFile(temporaryPath, filePath, operationResult.message);
+}
+
+MetadataResult MetadataBackend::addOrEdit(const QString &filePath,
+                                          const QString &tag,
+                                          const QString &value) const
+{
+    return applyChanges(filePath, false, {{tag, value, false}});
+}
+
+MetadataResult MetadataBackend::remove(const QString &filePath,
+                                       const QString &tag) const
+{
+    return applyChanges(filePath, false, {{tag, {}, true}});
+}
+
+MetadataResult MetadataBackend::removeAll(const QString &filePath) const
+{
+    return applyChanges(filePath, true, {});
+}
+
+QString MetadataBackend::tagValidationError(const QString &filePath,
+                                            const QString &tag) const
+{
+    if (DocumentMetadata::isSupportedDocument(filePath)) {
+        return DocumentMetadata::validationError(filePath, tag);
+    }
+
+    const QString cleanTag = tag.trimmed();
+    if (!validTagName(cleanTag)) {
+        return QStringLiteral("Invalid tag name. Use letters, numbers, '.', '_', "
+                              "'-', or ':'; for example XMP-dc:Title.");
+    }
+    return {};
+}
+
+QString MetadataBackend::tagHint(const QString &filePath) const
+{
+    const QString documentHint = DocumentMetadata::tagHint(filePath);
+    if (!documentHint.isEmpty()) {
+        return documentHint;
+    }
+    return QStringLiteral(
+        "Use an ExifTool tag name. A group prefix is recommended, for example "
+        "XMP-dc:Title, EXIF:Artist, IPTC:Keywords, or PDF:Author.");
 }
 
 bool MetadataBackend::isProprietaryRaw(const QString &filePath)
@@ -199,6 +350,11 @@ bool MetadataBackend::isPdf(const QString &filePath)
     return QFileInfo(filePath).suffix().compare(QStringLiteral("pdf"),
                                                 Qt::CaseInsensitive)
         == 0;
+}
+
+bool MetadataBackend::isDocumentPackage(const QString &filePath)
+{
+    return DocumentMetadata::isSupportedDocument(filePath);
 }
 
 MetadataBackend::ProcessResult MetadataBackend::runProcess(
@@ -258,6 +414,7 @@ QString MetadataBackend::processErrorText(const QString &program,
             .arg(program)
             .arg(result.exitCode);
     }
+
     return QStringLiteral("%1 failed with exit code %2:\n%3")
         .arg(program)
         .arg(result.exitCode)
@@ -293,7 +450,9 @@ bool MetadataBackend::isReadOnlyGroup(const QString &group)
     static const QSet<QString> readOnlyGroups = {
         QStringLiteral("ExifTool"), QStringLiteral("File"),
         QStringLiteral("System"), QStringLiteral("Composite"),
-        QStringLiteral("General"),
+        QStringLiteral("General"), QStringLiteral("ZIP"),
+        QStringLiteral("ZIP64"), QStringLiteral("OOXML"),
+        QStringLiteral("OpenDocument"),
     };
     return readOnlyGroups.contains(group);
 }
@@ -311,9 +470,6 @@ bool MetadataBackend::validTagName(const QString &tag)
         return false;
     }
 
-    // Prevent an ungrouped user-supplied tag from being interpreted as an
-    // ExifTool command-line option. Group-qualified tags such as XMP:Title are
-    // unambiguous tag assignments.
     if (!tag.contains(QLatin1Char(':'))) {
         static const QSet<QString> reservedOptionNames = {
             QStringLiteral("api"), QStringLiteral("argfile"),
@@ -332,16 +488,11 @@ bool MetadataBackend::validTagName(const QString &tag)
     return true;
 }
 
-MetadataResult MetadataBackend::runExifWrite(const QString &filePath,
-                                             const QString &assignment) const
+MetadataResult MetadataBackend::runExifWrites(
+    const QString &filePath,
+    const bool removeAll,
+    const QList<MetadataChange> &changes) const
 {
-    const QFileInfo info(filePath);
-    if (!info.exists() || !info.isFile()) {
-        return {false, QStringLiteral("The selected file no longer exists."), {}};
-    }
-    if (!info.isWritable()) {
-        return {false, QStringLiteral("The selected file is not writable."), {}};
-    }
     if (!exifToolAvailable()) {
         return {false,
                 QStringLiteral("ExifTool was not found. Install perl-image-exiftool."),
@@ -354,14 +505,34 @@ MetadataResult MetadataBackend::runExifWrite(const QString &filePath,
                 {}};
     }
 
-    const QStringList arguments = {
+    if (isPdf(filePath) && removeAll) {
+        const MetadataResult rewrite = rewritePdf(filePath, true);
+        if (!rewrite.ok) {
+            return rewrite;
+        }
+        if (changes.isEmpty()) {
+            return rewrite;
+        }
+    }
+
+    QStringList arguments = {
         QStringLiteral("-overwrite_original"),
         QStringLiteral("-P"),
         QStringLiteral("-charset"),
         QStringLiteral("filename=UTF8"),
-        assignment,
-        absoluteFilePath(filePath),
     };
+    if (removeAll && !isPdf(filePath)) {
+        arguments.append(QStringLiteral("-all="));
+    }
+    for (const MetadataChange &change : changes) {
+        QString assignment = QStringLiteral("-") + change.tag.trimmed()
+            + QLatin1Char('=');
+        if (!change.remove) {
+            assignment += change.value;
+        }
+        arguments.append(assignment);
+    }
+    arguments.append(absoluteFilePath(filePath));
 
     const ProcessResult process = runProcess(QStringLiteral("exiftool"), arguments);
     if (!process.launched || process.timedOut || process.exitCode != 0) {
@@ -381,7 +552,7 @@ MetadataResult MetadataBackend::runExifWrite(const QString &filePath,
 
     const QString output = combinedProcessText(process);
     return {true,
-            output.isEmpty() ? QStringLiteral("Metadata updated.") : output,
+            output.isEmpty() ? QStringLiteral("Metadata changes applied.") : output,
             {}};
 }
 
@@ -389,7 +560,8 @@ MetadataResult MetadataBackend::rewritePdf(const QString &filePath,
                                            const bool removeAllMetadata) const
 {
     if (!qpdfAvailable()) {
-        return {false, QStringLiteral("qpdf was not found. Install the qpdf package."), {}};
+        return {false, QStringLiteral("qpdf was not found. Install the qpdf package."),
+                {}};
     }
 
     QStringList arguments;
@@ -408,8 +580,6 @@ MetadataResult MetadataBackend::rewritePdf(const QString &filePath,
         return {false, processErrorText(QStringLiteral("qpdf"), process), {}};
     }
 
-    // qpdf may preserve the input under this name when it emitted warnings.
-    // Removing it prevents an old metadata-bearing copy from being left behind.
     QFile::remove(absoluteFilePath(filePath) + QStringLiteral(".~qpdf-orig"));
 
     QString message = combinedProcessText(process);
@@ -420,4 +590,47 @@ MetadataResult MetadataBackend::rewritePdf(const QString &filePath,
     }
 
     return {true, message, {}};
+}
+
+MetadataResult MetadataBackend::commitTemporaryFile(
+    const QString &temporaryPath,
+    const QString &destinationPath,
+    const QString &successMessage)
+{
+    const QFileInfo originalInfo(destinationPath);
+    const QFileDevice::Permissions permissions = originalInfo.permissions();
+    const QDateTime modified = originalInfo.lastModified();
+
+    QSaveFile destination(destinationPath);
+    destination.setDirectWriteFallback(false);
+    if (!destination.open(QIODevice::WriteOnly)) {
+        return {false,
+                QStringLiteral("Could not prepare the final file: %1")
+                    .arg(destination.errorString()),
+                {}};
+    }
+
+    QString copyError;
+    if (!copyFileToDevice(temporaryPath, &destination, &copyError)) {
+        destination.cancelWriting();
+        return {false, copyError, {}};
+    }
+    destination.setPermissions(permissions);
+    if (!destination.commit()) {
+        return {false,
+                QStringLiteral("Could not replace the original file safely: %1")
+                    .arg(destination.errorString()),
+                {}};
+    }
+
+    QFile finalFile(destinationPath);
+    if (finalFile.open(QIODevice::ReadWrite)) {
+        finalFile.setFileTime(modified, QFileDevice::FileModificationTime);
+        finalFile.close();
+    }
+
+    return {true,
+            successMessage.isEmpty() ? QStringLiteral("Metadata changes applied.")
+                                     : successMessage,
+            {}};
 }

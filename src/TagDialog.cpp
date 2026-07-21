@@ -13,6 +13,7 @@ TagDialog::TagDialog(QWidget *parent)
     : QDialog(parent)
     , m_tagEdit(new QLineEdit(this))
     , m_valueEdit(new QPlainTextEdit(this))
+    , m_hint(new QLabel(this))
 {
     setWindowTitle(QStringLiteral("Metadata field"));
     setModal(true);
@@ -20,16 +21,15 @@ TagDialog::TagDialog(QWidget *parent)
 
     m_tagEdit->setPlaceholderText(QStringLiteral("Example: XMP-dc:Title"));
     m_tagEdit->setValidator(new QRegularExpressionValidator(
-        QRegularExpression(QStringLiteral(R"(^[A-Za-z0-9][A-Za-z0-9_.:-]*$)")),
+        QRegularExpression(QStringLiteral(R"(^[A-Za-z0-9][A-Za-z0-9_.: -]*$)")),
         m_tagEdit));
 
     m_valueEdit->setPlaceholderText(QStringLiteral("Metadata value"));
 
-    auto *hint = new QLabel(
+    m_hint->setText(
         QStringLiteral("Use an ExifTool tag name. A group prefix is recommended "
-                       "when adding a field, for example XMP-dc:Title or EXIF:Artist."),
-        this);
-    hint->setWordWrap(true);
+                       "when adding a field, for example XMP-dc:Title or EXIF:Artist."));
+    m_hint->setWordWrap(true);
 
     auto *form = new QFormLayout;
     form->addRow(QStringLiteral("Tag:"), m_tagEdit);
@@ -41,7 +41,7 @@ TagDialog::TagDialog(QWidget *parent)
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
     auto *layout = new QVBoxLayout(this);
-    layout->addWidget(hint);
+    layout->addWidget(m_hint);
     layout->addLayout(form);
     layout->addWidget(buttons);
 }
@@ -65,4 +65,9 @@ QString TagDialog::tag() const
 QString TagDialog::value() const
 {
     return m_valueEdit->toPlainText();
+}
+
+void TagDialog::setHint(const QString &hint)
+{
+    m_hint->setText(hint);
 }
